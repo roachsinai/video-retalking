@@ -91,6 +91,7 @@ class ENet(nn.Module):
             gt_sequences = torch.cat([gt_sequences[:, :, i] for i in range(gt_sequences.size(2))], dim=0)
         
         # get the global style
+        # feat = F.leaky_relu_(self.conv_body_first(F.interpolate(gt_sequences, size=(256,256), mode='bilinear')), negative_slope=0.2)
         feat = F.leaky_relu_(self.conv_body_first(F.interpolate(ref, size=(256,256), mode='bilinear')), negative_slope=0.2)
         for i in range(self.log_size - 2):
             feat = self.conv_body_down[i](feat)
@@ -100,6 +101,7 @@ class ENet(nn.Module):
         style_code = self.final_linear(feat.reshape(feat.size(0), -1))
         style_code = style_code.reshape(style_code.size(0), -1, self.num_style_feat)
         
+        # LNet_input = torch.cat([inp, ref], dim=1)
         LNet_input = torch.cat([inp, gt_sequences], dim=1)
         LNet_input = F.interpolate(LNet_input, size=(96,96), mode='bilinear')
         

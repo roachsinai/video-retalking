@@ -195,8 +195,8 @@ def main():
     imgs_enhanced = []
     for idx in tqdm(range(len(imgs)), desc='[Step 5] Reference Enhancement'):
         img = imgs[idx]
-        pred, _, _ = enhancer.process(img, img, face_enhance=True, possion_blending=False)
-        imgs_enhanced.append(pred)
+        # pred, _, _ = enhancer.process(img, img, face_enhance=True, possion_blending=False)
+        imgs_enhanced.append(img)
     gen = datagen(imgs_enhanced.copy(), mel_chunks, full_frames, None, (oy1,oy2,ox1,ox2))
 
     frame_h, frame_w = full_frames[0].shape[:-1]
@@ -211,11 +211,15 @@ def main():
     for i, (img_batch, mel_batch, frames, coords, img_original, f_frames) in enumerate(tqdm(gen, desc='[Step 6] Lip Synthesis:', total=int(np.ceil(float(len(mel_chunks)) / args.LNet_batch_size)))):
         img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
         mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(device)
+        # img_original = torch.FloatTensor(np.transpose(img_original, (0, 3, 1, 2))).to(device)
+        # reference = img_original
         img_original = torch.FloatTensor(np.transpose(img_original, (0, 3, 1, 2))).to(device)/255. # BGR -> RGB
         
         with torch.no_grad():
             incomplete, reference = torch.split(img_batch, 3, dim=1) 
+            # incomplete, _ = torch.split(img_batch, 3, dim=1) 
             pred, low_res = model(mel_batch, img_batch, reference)
+            # img_original /= 255. # BGR -> RGB
             pred = torch.clamp(pred, 0, 1)
 
             if args.up_face in ['sad', 'angry', 'surprise']:
@@ -248,19 +252,37 @@ def main():
             ff[y1:y2, x1:x2] = p
             
             # month region enhancement by GFPGAN
+            # out.write(ff)
             cropped_faces, restored_faces, restored_img = restorer.enhance(
                 ff, has_aligned=False, only_center_face=True, paste_back=True)
-                # 0,   1,   2,   3,   4,   5,   6,   7,   8,  9, 10,  11,  12,
-            mm = [0,   0,   0,   0,   0,   0,   0,   0,   0,  0, 255, 255, 255, 0, 0, 0, 0, 0, 0]
+
+                  # 0,   1,   2,   3,   4,   5,   6,   7,   8,  9, 10,  11,  12,
+            # mm = [0,   0,   0,   0,   0,   0,   0,   0,   0,  0, 255, 255, 255, 0, 0, 0, 0, 0, 0]
+            mm = [0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0]
             mouse_mask = np.zeros_like(restored_img)
             tmp_mask = enhancer.faceparser.process(restored_img[y1:y2, x1:x2], mm)[0]
             mouse_mask[y1:y2, x1:x2]= cv2.resize(tmp_mask, (x2 - x1, y2 - y1))[:, :, np.newaxis] / 255.
 
             height, width = ff.shape[:2]
-            restored_img, ff, full_mask = [cv2.resize(x, (512, 512)) for x in (restored_img, ff, np.float32(mouse_mask))]
-            img = Laplacian_Pyramid_Blending_with_mask(restored_img, ff, full_mask[:, :, 0], 10)
-            pp = np.uint8(cv2.resize(np.clip(img, 0 ,255), (width, height)))
+            # restored_img, ff, full_mask = [cv2.resize(x, (512, 512)) for x in (restored_img, ff, np.float32(mouse_mask))]
+            # img = Laplacian_Pyramid_Blending_with_mask(restored_img, ff, full_mask[:, :, 0], 10)
+            # pp = np.uint8(cv2.resize(np.clip(img, 0 ,255), (width, height)))
 
+            full_mask = np.float32(mouse_mask)
+
+            face_h, face_w = y2 - y1, x2 - x1
+            face_center = (y1 + face_h // 2, x1 + face_w // 2)
+            face_size, e = next_power_of_two(max(face_h, face_w))
+            idx = (slice(face_center[0] - face_size // 2, face_center[0] + face_size // 2),
+                   slice(face_center[1] - face_size // 2, face_center[1] + face_size // 2))
+
+            img = Laplacian_Pyramid_Blending_with_mask(restored_img[idx], xf[idx], np.float32(full_mask[idx + (0,)]), e + 1)
+            pp = np.uint8(np.clip(img, 0 ,255))
+            xf[idx] = pp
+
+            out.write(xf)
+            continue
+            # pp, orig_faces, enhanced_faces = enhancer.process(pp, xf, bbox=c, face_enhance=True, possion_blending=False)
             pp, orig_faces, enhanced_faces = enhancer.process(pp, xf, bbox=c, face_enhance=False, possion_blending=True)
             out.write(pp)
     out.release()
@@ -336,6 +358,14 @@ def datagen(frames, mels, full_frames, frames_pil, cox):
         img_batch = np.concatenate((img_masked, ref_batch), axis=3) / 255.
         mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])
         yield img_batch, mel_batch, frame_batch, coords_batch, img_original, full_frame_batch
+
+def next_power_of_two(a):
+    n = 1
+    e = 0
+    while n <= a:
+        n *= 2
+        e += 1
+    return n, e
 
 
 if __name__ == '__main__':
